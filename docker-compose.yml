@@ -1,32 +1,36 @@
-# docker-compose.yml — поднимает FastAPI и MongoDB вместе
-version: '3.9'
+# docker-compose.yml — запуск FastAPI в контейнере с подключением к MongoDB на хосте
+version: '3.8'
 
 services:
-  app:
+  fastapi_app:
+    # 1) Строим образ из Dockerfile в текущей папке
     build: .
     container_name: fastapi_app
+
+    # 2) Пробрасываем порт контейнера 8000 на хост 8000
     ports:
       - "8000:8000"
+
+    # 3) Определяем переменные окружения для приложения
     environment:
-      MONGO_URI: "mongodb://mongo:27017/"
+      # URI подключения к MongoDB, которая уже запущена на хост-машине
+      # host.docker.internal указывает внутри контейнера на хост
+      MONGO_URI: "mongodb://host.docker.internal:27017/"
+      # Имя вашей БД в MongoDB (совпадает с DB_NAME в коде)
       DB_NAME: "namaz_db"
-    depends_on:
-      - mongo
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+      # Порт, на котором Uvicorn запускает FastAPI (сопадает с проброшенным)
+      PORT: "8000"
 
-  mongo:
-    image: mongo:latest
-    container_name: mongo
-    ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_DATABASE: "namaz_db"
-    volumes:
-      - mongo_data:/data/db
+    # 4) Делаем запись host.docker.internal → шлюз Docker-сети
+    #    Это нужно для Linux, чтобы контейнер мог резолвить host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
-networks:
-  default:
-    name: app-network
+    # 5) Команда запуска Uvicorn-сервера
+    command: >
+      uvicorn main:app
+      --host 0.0.0.0
+      --port 8000
 
-volumes:
-  mongo_data:
+    # 6) Автоматический перезапуск контейнера при сбоях или перезагрузке хоста
+    restart: unless-stopped
