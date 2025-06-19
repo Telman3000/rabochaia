@@ -1,0 +1,32 @@
+# docker-compose.yml — поднимает FastAPI и MongoDB вместе
+version: '3.9'
+
+services:
+  app:
+    build: .
+    container_name: fastapi_app
+    ports:
+      - "8000:8000"
+    environment:
+      MONGO_URI: "mongodb://mongo:27017/"
+      DB_NAME: "namaz_db"
+    depends_on:
+      - mongo
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+
+  mongo:
+    image: mongo:latest
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: "namaz_db"
+    volumes:
+      - mongo_data:/data/db
+
+networks:
+  default:
+    name: app-network
+
+volumes:
+  mongo_data:
