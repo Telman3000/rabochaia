@@ -1,22 +1,21 @@
-# docker-compose.yml
+version: '3.8'
+
 services:
   app:
-    build: .
+    build: .                       # Собираем образ из вашего Dockerfile
     container_name: fastapi_app
 
-    # берём переменные из .env
-    env_file:
-      - .env
-
-    # хостовый порт 8080 → контейнерный PORT (8000)
+    # Пробрасываем порт 8000 контейнера на порт 8000 хоста
     ports:
-      - "8080:${PORT}"
+      - "8000:8000"
 
-    # чтобы host.docker.internal резолвился в IP хоста (Linux)
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    environment:
+      # Подключаемся к MongoDB, запущенному на хосте по адресу docker0 (Linux)
+      MONGO_URI: "mongodb://172.17.0.1:27017/"
+      DB_NAME:   "namaz_db"
 
-    # команда запуска Uvicorn (порт берётся из PORT)
-    command: uvicorn main:app --host 0.0.0.0 --port ${PORT}
+    # Всегда рестартуем при падении
+    restart: unless-stopped
 
-    restart: always
+    # Запускаем Uvicorn на 0.0.0.0:8000 внутри контейнера
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
