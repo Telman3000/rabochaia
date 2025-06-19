@@ -1,22 +1,22 @@
-version: '3.8'
-
+# docker-compose.yml
 services:
   app:
     build: .
     container_name: fastapi_app
 
-    # Пробрасываем хостовый порт 8080 → контейнерный 8000
+    # берём переменные из .env
+    env_file:
+      - .env
+
+    # хостовый порт 8080 → контейнерный PORT (8000)
     ports:
-      - "8080:8000"
+      - "8080:${PORT}"
 
-    environment:
-      MONGO_URI: "mongodb://host.docker.internal:27017"
-      DB_NAME:   "namaz_db"
-
+    # чтобы host.docker.internal резолвился в IP хоста (Linux)
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-    restart: always
+    # команда запуска Uvicorn (порт берётся из PORT)
+    command: uvicorn main:app --host 0.0.0.0 --port ${PORT}
 
-    # В контейнере Uvicorn по-прежнему слушает 8000
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    restart: always
