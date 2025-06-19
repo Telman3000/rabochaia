@@ -1,72 +1,92 @@
 # -*- coding: utf-8 -*-
+import os
+from datetime import datetime
+from collections import defaultdict
+
+import pandas as pd
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-import pandas as pd
 from pymongo import MongoClient
-from collections import defaultdict
-from datetime import datetime
-import os
-
 from dotenv import load_dotenv
+
+# ─── 1) Загрузка .env ─────────────────────────────────────────────────────────────
 load_dotenv()
 
-# ─── Настройки MongoDB ────────────────────────────────────────────────────────────
-MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
-DB_NAME   = os.getenv('DB_NAME', 'namaz_db')
+# ─── 2) Конфигурируем дефолтный метод рекомендаций ────────────────────────────────
+#    Можно переопределить через переменную окружения DEFAULT_RECOMMENDATION_METHOD
+DEFAULT_RECOMMENDATION_METHOD = os.getenv("DEFAULT_RECOMMENDATION_METHOD", "popularity")
 
-client        = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-db            = client[DB_NAME]
-col_learners  = db['users_learners']
-col_logs      = db['users_logs']
-col_outcomes  = db['outcomes']
-col_grouped   = db['users_grouped']
+# ─── 3) Настройки MongoDB ─────────────────────────────────────────────────────────
+MONGO_URI      = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
+DB_NAME        = os.getenv('DB_NAME', 'namaz_db')
 
-# ─── FastAPI + Jinja2 ─────────────────────────────────────────────────────────────
+client         = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+db             = client[DB_NAME]
+col_learners   = db['users_learners']
+col_logs       = db['users_logs']
+col_outcomes   = db['outcomes']
+col_grouped    = db['users_grouped']
+
+# ─── 4) FastAPI + Jinja2 ───────────────────────────────────────────────────────────
 app       = FastAPI(title="Dynamic Metrics Table")
 templates = Jinja2Templates(directory="templates")
 
 def console_log(action: str, message: str):
+    """Универсальный логгер в консоль с отметкой времени."""
     ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"[{action} at {ts}] {message}")
 
-# ─── Загрузка данных ──────────────────────────────────────────────────────────────
+# ─── 5) Загрузка и предобработка данных Learners ───────────────────────────────────
 def load_learners_from_db() -> pd.DataFrame:
+    """Загружает всех пользователей и готовит DataFrame с нужными столбцами."""
     docs = list(col_learners.find())
     df   = pd.DataFrame(docs)
-    console_log("Debug", f"Learners columns: {df.columns.tolist()}")
+    console_log("Debug", f"Learners columns from DB: {df.columns.tolist()}")
 
+    # Приводим ObjectId в строку
     if '_id' in df.columns:
         df['_id'] = df['_id'].astype(str)
+    # Фильтрация по полю selected, если оно есть
     if 'selected' in df.columns:
         df['selected'] = pd.to_numeric(df['selected'], errors='coerce').fillna(0).astype(int)
         df = df[df['selected'] == 0]
+    # Убедимся, что launch_count есть и в числовом виде
     if 'launch_count' in df.columns:
         df['launch_count'] = pd.to_numeric(df['launch_count'], errors='coerce').fillna(0).astype(int)
     else:
         df['launch_count'] = 0
 
+    # ── Вот ключевая правка: если нет столбца recommendation_method,
+    #     добавляем его со значением по умолчанию, а не кидаем ошибку.
     if 'recommendation_method' not in df.columns:
-        raise KeyError("Нет поля 'recommendation_method' в коллекции users_learners")
+        console_log("Warning", "Поле 'recommendation_method' отсутствует — ставим дефолт")
+        df['recommendation_method'] = DEFAULT_RECOMMENDATION_METHOD
+
     return df
 
+# ─── 6) Загрузка логов пользователей ───────────────────────────────────────────────
 def load_logs_from_db() -> pd.DataFrame:
+    """Загружает логи пользователей и приводит learner_id к строке."""
     docs = list(col_logs.find())
     df   = pd.DataFrame(docs)
     if 'learner_id' in df.columns:
         df['learner_id'] = df['learner_id'].astype(str)
     return df
 
+# ─── 7) Построение карты Outcome → Activity IDs ────────────────────────────────────
 def build_outcome_map_db() -> dict:
+    """Собираем словарь: Outcome ID → список activity_id, которые он оценивает."""
     outcome_map = defaultdict(list)
     for doc in col_outcomes.find():
         key      = doc.get('Outcome ID') or doc.get('Outcome_ID') or doc.get('OutcomeID')
         assesses = doc.get('Assesses', '')
+        # разбиваем по запятым, чистим пробелы, группируем
         for item in filter(None, map(str.strip, assesses.split(','))):
             outcome_map[key].append(item)
     return outcome_map
 
-# ─── Метрики ────────────────────────────────────────────────────────────────────
+# ─── 8) Метрики ───────────────────────────────────────────────────────────────────
 def compute_grouped_size(df: pd.DataFrame) -> pd.DataFrame:
     return df.groupby('recommendation_method')\
              .agg(group_size=('_id','count'))\
@@ -105,11 +125,13 @@ def compute_ctr(logs_df, learners_df):
     )
 
 def compute_mastery(logs_df, learners_df, outcome_map):
+    # Если вообще нет колонки value, возвращаем 0 по всем
     if 'value' not in logs_df.columns:
         df = learners_df[['recommendation_method']].copy()
         df['mastery_rate'] = 0.0
         return df
 
+    # Оставляем только числовые значения
     numeric = logs_df[logs_df['value'].apply(
         lambda x: isinstance(x, (int,float,str)) and str(x).replace('.','',1).isdigit()
     )].copy()
@@ -131,7 +153,7 @@ def compute_mastery(logs_df, learners_df, outcome_map):
         .mean().reset_index(name='mastery_rate')
     )
 
-# ─── Маршруты ───────────────────────────────────────────────────────────────────
+# ─── 9) Маршруты ───────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -139,16 +161,19 @@ async def index(request: Request):
 @app.get("/metrics", response_class=HTMLResponse)
 async def metrics(request: Request):
     try:
+        # Загружаем все данные
         learners_df = load_learners_from_db()
         logs_df     = load_logs_from_db()
         outcome_map = build_outcome_map_db()
 
+        # Вычисляем метрики
         grouped    = compute_grouped_size(learners_df)
         retention  = compute_retention(logs_df, learners_df)
         engagement = compute_engagement(logs_df, learners_df)
         ctr        = compute_ctr(logs_df, learners_df)
         mastery    = compute_mastery(logs_df, learners_df, outcome_map)
 
+        # Собираем финальную таблицу и считаем CTR
         final = (
             grouped
             .merge(retention,  on="recommendation_method", how="left")
@@ -159,6 +184,7 @@ async def metrics(request: Request):
         )
         final["CTR"] = final["ctr_clicks"] / final["group_size"]
 
+        # Рендерим HTML-таблицу
         table = final[[
             "recommendation_method", "group_size",
             "retention", "engagement", "CTR", "mastery_rate"
@@ -173,7 +199,7 @@ async def metrics(request: Request):
         console_log("Error", f"Error in /metrics: {e}")
         return HTMLResponse(f"Ошибка: {e}", status_code=500)
 
-# ─── Запуск ─────────────────────────────────────────────────────────────────────
+# ─── 10) Точка входа для локального запуска ─────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
