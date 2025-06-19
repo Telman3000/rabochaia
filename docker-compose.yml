@@ -1,23 +1,25 @@
-# docker-compose.yml
+# docker-compose.yml — FastAPI на порту 8080 + MongoDB на хосте
 version: '3.8'
 
 services:
-  fastapi_app:
+  app:
     build: .
     container_name: fastapi_app
 
-    # Используем сетевой режим host: контейнер разделяет сеть с хостом
-    network_mode: host
+    ports:
+      - "8080:8080"         # Проброс порта 8080
 
-    # Переменные окружения (Mongo ищется на localhost:27017)
     environment:
-      DB_NAME: "namaz_db"
-      # MONGO_URI по умолчанию уже 'mongodb://localhost:27017/'
-      # Но на всякий случай можно явно:
-      MONGO_URI: "mongodb://localhost:27017/"
+      MONGO_URI: "mongodb://host.docker.internal:27017"
+      DB_NAME:   "namaz_db"
+      PORT:      "8080"
 
-    # Автоматический рестарт
-    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
-    # Команда запуска Uvicorn (будет слушать порт 8000 на хосте)
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    restart: always
+
+    command: >
+      uvicorn main:app
+      --host 0.0.0.0
+      --port 8080
